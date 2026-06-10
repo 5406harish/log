@@ -610,7 +610,13 @@ if uploaded_file is not None:
             st.session_state.agent_tool_calls = []
         st.session_state.agent_tool_calls = []
 
-        with st.spinner("🤖 Agent is investigating the log file... This may take a while."):
+        st.info(
+            "⏳ The agent uses multiple LLM calls with tool-calling. "
+            "On the Groq free tier this may take 30–90 seconds due to "
+            "rate-limit management. Please be patient."
+        )
+
+        with st.spinner("🤖 Agent is investigating the log file — scanning, parsing, and analysing..."):
             try:
                 agent = LogAnalysisAgent(api_key=api_key)
 
@@ -626,7 +632,7 @@ if uploaded_file is not None:
                             "❌ **Rate Limited** — Groq API rate limit hit. "
                             "The agent retried automatically but the limit persists.\n\n"
                             "**Options:**\n"
-                            "- ⏳ Wait a moment and try again\n"
+                            "- ⏳ Wait 1–2 minutes and try again\n"
                             "- 💳 Check your plan at "
                             "[console.groq.com](https://console.groq.com)\n"
                             "- 🔎 Use **Quick Scan** (no API key needed) in the meantime"

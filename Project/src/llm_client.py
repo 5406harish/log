@@ -89,8 +89,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Retry configuration for 429 rate-limit errors
 # ---------------------------------------------------------------------------
-MAX_RETRIES = 3
-INITIAL_BACKOFF_SECONDS = 10  # first retry waits 10s, then 20s, then 40s
+MAX_RETRIES = 5
+INITIAL_BACKOFF_SECONDS = 15  # first retry waits 15s, then 30s, then 60s, ...
 
 
 def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, initial_backoff=INITIAL_BACKOFF_SECONDS):
@@ -109,7 +109,7 @@ def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, initial_backoff=INITIA
             exc_str = str(exc)
             # Only retry on rate-limit / quota errors
             if "429" not in exc_str and "rate" not in exc_str.lower():
-                raise
+                raise exc
             last_exc = exc
             if attempt == max_retries:
                 break
@@ -240,4 +240,18 @@ class GroqClient:
                     next_header_pos = pos
             sections[key] = text[content_start:next_header_pos].strip()
 
+        # Fallback: if confidence is still UNKNOWN, try to extract from text
+        if sections["confidence"] == "UNKNOWN" or sections["confidence"] == "":
+            conf_match = re.search(
+                r"\b(confidence)\b[:\s]*(HIGH|MEDIUM|LOW)",
+                text,
+                re.IGNORECASE,
+            )
+            if conf_match:
+                sections["confidence"] = conf_match.group(2).upper()
+            elif sections["root_cause"]:
+                # We have analysis but no confidence - default to MEDIUM
+                sections["confidence"] = "MEDIUM"
+
         return sections
+
