@@ -28,41 +28,27 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Rate-limit-aware retry helper
+# Simple retry helper
 # ---------------------------------------------------------------------------
-MAX_RETRIES = 5
-INITIAL_BACKOFF = 15  # seconds
+MAX_RETRIES = 2
+RETRY_DELAY = 5  # seconds
 
 
-def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, initial_backoff=INITIAL_BACKOFF):
-    """Execute *call_fn()* with exponential backoff on 429 errors."""
+def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
+    """Execute *call_fn()* with simple retry on transient errors."""
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
             return call_fn()
         except Exception as exc:
-            exc_str = str(exc)
-            if "429" not in exc_str and "rate" not in exc_str.lower():
-                raise exc
             last_exc = exc
             if attempt == max_retries:
                 break
-            # Parse server-suggested retry delay
-            match = re.search(r"retry in ([\d.]+)s", exc_str, re.IGNORECASE)
-            if match:
-                wait = float(match.group(1)) + 2
-            else:
-                match_min = re.search(r"try again in (\d+)m([\d.]+)s", exc_str, re.IGNORECASE)
-                if match_min:
-                    wait = int(match_min.group(1)) * 60 + float(match_min.group(2)) + 2
-                else:
-                    wait = initial_backoff * (2 ** attempt)
-            wait = min(wait, 120)
             logger.warning(
-                "Rate limited (429). Retrying in %.1fs (attempt %d/%d)...",
-                wait, attempt + 1, max_retries,
+                "API call failed. Retrying in %ds (attempt %d/%d)...",
+                delay, attempt + 1, max_retries,
             )
-            time.sleep(wait)
+            time.sleep(delay)
     raise last_exc  # type: ignore[misc]
 
 

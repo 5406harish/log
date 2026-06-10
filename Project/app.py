@@ -553,19 +553,7 @@ if uploaded_file is not None:
                         "primary_line_content": block.primary_line_content.strip(),
                     }
                 except Exception as exc:
-                    exc_str = str(exc)
-                    if "429" in exc_str or "rate" in exc_str.lower():
-                        st.error(
-                            "❌ **Rate Limited** — Groq API rate limit hit. "
-                            "The app retried automatically but the limit persists.\n\n"
-                            "**Options:**\n"
-                            "- ⏳ Wait a moment and try again\n"
-                            "- 💳 Check your plan at "
-                            "[console.groq.com](https://console.groq.com)\n"
-                            "- 🔎 Use **Quick Scan** (no API key needed) in the meantime"
-                        )
-                    else:
-                        st.error(f"❌ LLM Error: {exc}")
+                    st.error(f"❌ LLM Error: {exc}")
                     analysis = None
 
             if analysis:
@@ -610,13 +598,8 @@ if uploaded_file is not None:
             st.session_state.agent_tool_calls = []
         st.session_state.agent_tool_calls = []
 
-        st.info(
-            "⏳ The agent uses multiple LLM calls with tool-calling. "
-            "On the Groq free tier this may take 30–90 seconds due to "
-            "rate-limit management. Please be patient."
-        )
 
-        with st.spinner("🤖 Agent is investigating the log file — scanning, parsing, and analysing..."):
+        with st.spinner("🤖 Agent is investigating the log file..."):
             try:
                 agent = LogAnalysisAgent(api_key=api_key)
 
@@ -626,19 +609,7 @@ if uploaded_file is not None:
                     user_query=None,
                 )
             except Exception as exc:
-                    exc_str = str(exc)
-                    if "429" in exc_str or "rate" in exc_str.lower():
-                        st.error(
-                            "❌ **Rate Limited** — Groq API rate limit hit. "
-                            "The agent retried automatically but the limit persists.\n\n"
-                            "**Options:**\n"
-                            "- ⏳ Wait 1–2 minutes and try again\n"
-                            "- 💳 Check your plan at "
-                            "[console.groq.com](https://console.groq.com)\n"
-                            "- 🔎 Use **Quick Scan** (no API key needed) in the meantime"
-                        )
-                    else:
-                        st.error(f"❌ Agent Error: {exc}")
+                    st.error(f"❌ Agent Error: {exc}")
                     result = None
 
         if result:

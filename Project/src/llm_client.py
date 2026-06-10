@@ -4,8 +4,6 @@ LLM Client Module
 Packages the extracted anomaly context into a structured prompt and sends it
 to the Groq Cloud API via the OpenAI-compatible SDK.
 Uses Llama 3.3 70B (free tier) for fast, high-quality log analysis.
-
-Includes automatic retry with exponential backoff for 429 rate-limit errors.
 """
 
 from __future__ import annotations
@@ -87,43 +85,27 @@ USER_PROMPT_TEMPLATE = textwrap.dedent("""\
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Retry configuration for 429 rate-limit errors
+# Simple retry helper
 # ---------------------------------------------------------------------------
-MAX_RETRIES = 5
-INITIAL_BACKOFF_SECONDS = 15  # first retry waits 15s, then 30s, then 60s, ...
+MAX_RETRIES = 2
+RETRY_DELAY = 5  # seconds
 
 
-def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, initial_backoff=INITIAL_BACKOFF_SECONDS):
-    """Execute *call_fn()* with exponential backoff on 429 errors.
-
-    When the Groq API returns a 429 rate-limit response, the OpenAI SDK
-    raises an exception whose message contains '429'.  We parse the
-    suggested retry delay when possible, otherwise fall back to
-    exponential backoff.
-    """
+def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
+    """Execute *call_fn()* with simple retry on transient errors."""
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
             return call_fn()
         except Exception as exc:
-            exc_str = str(exc)
-            # Only retry on rate-limit / quota errors
-            if "429" not in exc_str and "rate" not in exc_str.lower():
-                raise exc
             last_exc = exc
             if attempt == max_retries:
                 break
-            # Try to parse the server-suggested retry delay
-            match = re.search(r"retry in ([\d.]+)s", exc_str, re.IGNORECASE)
-            if match:
-                wait = float(match.group(1)) + 1  # add 1s buffer
-            else:
-                wait = initial_backoff * (2 ** attempt)
             logger.warning(
-                "Rate limited (429). Retrying in %.1fs (attempt %d/%d)...",
-                wait, attempt + 1, max_retries,
+                "API call failed. Retrying in %ds (attempt %d/%d)...",
+                delay, attempt + 1, max_retries,
             )
-            time.sleep(wait)
+            time.sleep(delay)
     raise last_exc  # type: ignore[misc]
 
 
