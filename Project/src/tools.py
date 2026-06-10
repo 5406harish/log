@@ -18,7 +18,7 @@ from src.parser import LogParser
 # Tool implementations
 # ---------------------------------------------------------------------------
 
-def parse_log_file(file_path: str, context_window: int = 20) -> dict[str, Any]:
+def parse_log_file(file_path: str, context_window: int = 20, **kwargs) -> dict[str, Any]:
     """Parse a log file and return the primary anomaly with surrounding context."""
     parser = LogParser(context_window=context_window)
     try:
@@ -42,7 +42,7 @@ def parse_log_file(file_path: str, context_window: int = 20) -> dict[str, Any]:
     }
 
 
-def scan_all_anomalies(file_path: str, context_window: int = 20) -> dict[str, Any]:
+def scan_all_anomalies(file_path: str, context_window: int = 20, **kwargs) -> dict[str, Any]:
     """Scan a log file and return a summary of ALL distinct anomaly clusters."""
     parser = LogParser(context_window=context_window)
     try:
@@ -70,7 +70,7 @@ def scan_all_anomalies(file_path: str, context_window: int = 20) -> dict[str, An
     }
 
 
-def read_log_lines(file_path: str, start_line: int, end_line: int) -> dict[str, Any]:
+def read_log_lines(file_path: str, start_line: int, end_line: int, **kwargs) -> dict[str, Any]:
     """Read specific lines from a log file (1-indexed, inclusive)."""
     path = Path(file_path)
     if not path.exists():
@@ -96,7 +96,7 @@ def read_log_lines(file_path: str, start_line: int, end_line: int) -> dict[str, 
     }
 
 
-def search_log_pattern(file_path: str, pattern: str) -> dict[str, Any]:
+def search_log_pattern(file_path: str, pattern: str, **kwargs) -> dict[str, Any]:
     """Search for a regex pattern in the log file and return matching lines."""
     path = Path(file_path)
     if not path.exists():
