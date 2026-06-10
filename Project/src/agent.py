@@ -211,7 +211,7 @@ class LogAnalysisAgent:
             api_key=self.api_key,
             base_url="https://api.groq.com/openai/v1",
         )
-        self.model_name = model or "llama-3.3-70b-versatile"
+        self.model_name = model or "meta-llama/llama-4-scout-17b-16e-instruct"
         self.tool_calls_log: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
