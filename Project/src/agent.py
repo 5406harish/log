@@ -1,15 +1,11 @@
 """
 Agent Module
 ============
-Implements a tool-using agent loop where the LLM iteratively calls tools
-(log parser, line reader, pattern searcher) to investigate anomalies before
-producing a final structured analysis.
+Implements a log investigation agent that gathers data using tools locally,
+then makes a SINGLE LLM call for analysis.
 
-Uses the Groq Cloud API (free tier) via the OpenAI-compatible SDK.
-Optimised for free-tier rate limits:
-  - Uses llama-3.1-8b-instant for fast, cheap tool-calling iterations
-  - Adds generous inter-iteration delays to avoid 429 bursts
-  - Limits context size sent back to the model to conserve TPM
+This single-pass approach avoids rate-limit issues on the Groq free tier
+by minimising API calls to exactly ONE.
 """
 
 from __future__ import annotations
@@ -32,46 +28,35 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Maximum iterations to prevent infinite loops
+# Rate-limit-aware retry helper
 # ---------------------------------------------------------------------------
-MAX_AGENT_ITERATIONS = 6
-
-# ---------------------------------------------------------------------------
-# Rate-limit-aware retry helper (standalone, no import needed)
-# ---------------------------------------------------------------------------
-AGENT_MAX_RETRIES = 5
-AGENT_INITIAL_BACKOFF = 20  # seconds
+MAX_RETRIES = 5
+INITIAL_BACKOFF = 15  # seconds
 
 
-def _agent_call_with_retry(call_fn, *, max_retries=AGENT_MAX_RETRIES, initial_backoff=AGENT_INITIAL_BACKOFF):
-    """Execute *call_fn()* with exponential backoff on 429 errors.
-
-    Parses the server-suggested retry delay when available.
-    """
+def _call_with_retry(call_fn, *, max_retries=MAX_RETRIES, initial_backoff=INITIAL_BACKOFF):
+    """Execute *call_fn()* with exponential backoff on 429 errors."""
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
             return call_fn()
         except Exception as exc:
             exc_str = str(exc)
-            # Only retry on rate-limit / quota errors
             if "429" not in exc_str and "rate" not in exc_str.lower():
                 raise exc
             last_exc = exc
             if attempt == max_retries:
                 break
-            # Try to parse the server-suggested retry delay
+            # Parse server-suggested retry delay
             match = re.search(r"retry in ([\d.]+)s", exc_str, re.IGNORECASE)
             if match:
-                wait = float(match.group(1)) + 2  # add 2s buffer
+                wait = float(match.group(1)) + 2
             else:
-                # Also try "try again in Xm Ys" format
                 match_min = re.search(r"try again in (\d+)m([\d.]+)s", exc_str, re.IGNORECASE)
                 if match_min:
                     wait = int(match_min.group(1)) * 60 + float(match_min.group(2)) + 2
                 else:
                     wait = initial_backoff * (2 ** attempt)
-            # Cap wait at 120 seconds
             wait = min(wait, 120)
             logger.warning(
                 "Rate limited (429). Retrying in %.1fs (attempt %d/%d)...",
@@ -85,32 +70,11 @@ def _agent_call_with_retry(call_fn, *, max_retries=AGENT_MAX_RETRIES, initial_ba
 # Agent system instruction
 # ---------------------------------------------------------------------------
 AGENT_SYSTEM_INSTRUCTION = textwrap.dedent("""\
-    You are an expert Site Reliability Engineer (SRE) agent with access to log
-    analysis tools.  Your job is to investigate log files to find and explain
-    anomalies.
+    You are an expert Site Reliability Engineer (SRE) agent.
+    You have been given the results of several log analysis tools.
+    Analyse the data and provide a structured investigation report.
 
-    **Available tools:**
-    1. **parse_log_file** — Parse a log file to find the primary (highest-severity)
-       anomaly and extract surrounding context lines.
-    2. **scan_all_anomalies** — Scan the entire log and list all distinct anomaly
-       clusters with their severity scores.
-    3. **read_log_lines** — Read a specific range of lines from the log file for
-       deeper inspection.
-    4. **search_log_pattern** — Search the log for a regex pattern and return
-       matching lines with line numbers.
-
-    **Investigation workflow:**
-    1. Start by scanning the log to get an overview of all anomalies.
-    2. Parse the log to get full context around the primary anomaly.
-    3. If needed, read additional lines or search for related patterns (e.g.
-       preceding warnings, correlated request IDs) to build a complete picture.
-    4. Once you have enough information, provide your final analysis.
-
-    **IMPORTANT:** Be efficient with tool calls. Try to gather all needed info
-    in as few calls as possible. After 2-3 tool calls you should have enough
-    context to provide your analysis.
-
-    **Your final response MUST use this exact structured format:**
+    **Your response MUST use this exact structured format:**
 
     ## Root Cause Analysis
     <One concise paragraph explaining the technical root cause of the error.>
@@ -127,118 +91,11 @@ AGENT_SYSTEM_INSTRUCTION = textwrap.dedent("""\
     <A single word: HIGH / MEDIUM / LOW>
 """)
 
-# ---------------------------------------------------------------------------
-# OpenAI-style tool definitions for Groq function calling
-# ---------------------------------------------------------------------------
-TOOL_DECLARATIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "parse_log_file",
-            "description": (
-                "Parse a log file to detect the primary (highest-severity) anomaly "
-                "and extract surrounding context lines."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Absolute path to the log file to analyse.",
-                    },
-                    "context_window": {
-                        "type": "integer",
-                        "description": "Number of context lines before/after the anomaly. Default: 20.",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "scan_all_anomalies",
-            "description": (
-                "Scan a log file and return a summary of ALL distinct anomaly "
-                "clusters with their severity scores."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Absolute path to the log file.",
-                    },
-                    "context_window": {
-                        "type": "integer",
-                        "description": "Context window size for cluster de-duplication. Default: 20.",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_log_lines",
-            "description": (
-                "Read a specific range of lines from the log file for deeper "
-                "inspection. Lines are 1-indexed and inclusive."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Absolute path to the log file.",
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "First line to read (1-indexed).",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "Last line to read (1-indexed, inclusive).",
-                    },
-                },
-                "required": ["file_path", "start_line", "end_line"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_log_pattern",
-            "description": (
-                "Search the log file for a regex pattern. Returns up to 50 "
-                "matching lines with their line numbers."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Absolute path to the log file.",
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Regex pattern to search for (case-insensitive).",
-                    },
-                },
-                "required": ["file_path", "pattern"],
-            },
-        },
-    },
-]
 
-
-def _truncate_tool_result(result: dict, max_chars: int = 3000) -> str:
-    """Serialise a tool result dict, truncating if too long to save tokens."""
-    text = json.dumps(result, default=str)
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n... [truncated for brevity]"
+def _truncate(text: str, max_len: int = 2000) -> str:
+    """Truncate text to save tokens."""
+    if len(text) > max_len:
+        return text[:max_len] + "\n... [truncated]"
     return text
 
 
@@ -247,22 +104,17 @@ def _truncate_tool_result(result: dict, max_chars: int = 3000) -> str:
 # ---------------------------------------------------------------------------
 class LogAnalysisAgent:
     """
-    Tool-using agent that iteratively investigates log files.
+    Single-pass log investigation agent.
 
-    The agent loop:
-      1. Sends the user request + tool declarations to Groq.
-      2. If the model returns tool_calls, executes them and sends results back.
-      3. Repeats until the model produces a final text response (no more tool calls).
-      4. Parses the structured response and returns it.
+    Instead of an iterative LLM loop (which burns through rate limits),
+    this agent:
+      1. Runs ALL tools locally (no LLM needed) to gather data
+      2. Makes ONE single LLM call with all gathered data for analysis
 
-    Optimised for Groq free tier:
-      - Uses llama-3.1-8b-instant for tool-calling (fast, high rate limits)
-      - Adds inter-iteration delays to avoid 429 rate-limit bursts
-      - Truncates large tool results to conserve token budget
+    This uses exactly 1 API call, avoiding rate-limit issues entirely.
     """
 
-    # Use a small fast model for tool-calling to avoid rate limits
-    DEFAULT_MODEL = "llama-3.1-8b-instant"
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
     def __init__(
         self,
@@ -293,13 +145,10 @@ class LogAnalysisAgent:
         on_tool_call: Optional[Callable[[str, dict, dict], None]] = None,
     ) -> dict[str, Any]:
         """
-        Run the agent loop to investigate a log file.
+        Run the agent to investigate a log file.
 
-        Args:
-            log_file_path:  Absolute path to the log file.
-            user_query:     Optional extra context or question from the user.
-            on_tool_call:   Optional callback(tool_name, args, result) for
-                            live progress reporting.
+        Phase 1: Run tools locally (no API calls)
+        Phase 2: Send all gathered data to LLM in ONE call
 
         Returns:
             dict with keys: root_cause, probable_cause, remediation,
@@ -307,198 +156,164 @@ class LogAnalysisAgent:
         """
         self.tool_calls_log = []
 
-        # Build initial user message
-        initial_prompt = (
-            f"Investigate the log file at: {log_file_path}\n\n"
-            "Use your tools to scan for anomalies, read context, and search "
-            "for related patterns. Then provide your structured analysis.\n\n"
-            "Be efficient: use scan_all_anomalies first, then parse_log_file, "
-            "then provide your analysis. Minimise tool calls."
-        )
-        if user_query:
-            initial_prompt += f"\n\nAdditional context from the engineer: {user_query}"
+        # ── Phase 1: Gather data using tools locally ──
+        gathered_data = self._gather_data(log_file_path, on_tool_call)
 
-        # Conversation history (OpenAI message format)
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": AGENT_SYSTEM_INSTRUCTION},
-            {"role": "user", "content": initial_prompt},
-        ]
-
-        # --- Agent loop ---
-        for iteration in range(MAX_AGENT_ITERATIONS):
-            # Generous delay between iterations to avoid rate-limit bursts
-            if iteration > 0:
-                delay = 5 + iteration * 2  # 7s, 9s, 11s, ...
-                logger.info("Agent iteration %d — waiting %ds before next call...", iteration + 1, delay)
-                time.sleep(delay)
-
-            def _do_call():
-                return self._client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    tools=TOOL_DECLARATIONS,
-                    tool_choice="auto",
-                    temperature=0.3,
-                    max_tokens=4096,
-                )
-
-            try:
-                response = _agent_call_with_retry(_do_call)
-            except Exception as exc:
-                # If we've gathered any tool results, try to produce a partial analysis
-                if self.tool_calls_log:
-                    logger.warning("Rate limited after %d iterations, producing partial analysis", iteration)
-                    return self._fallback_analysis(iteration)
-                raise
-
-            choice = response.choices[0]
-            assistant_message = choice.message
-
-            # Check for tool calls
-            tool_calls = assistant_message.tool_calls
-
-            if not tool_calls:
-                # ── Final text response ──
-                raw = assistant_message.content or ""
-                parsed = self._parse_response(raw)
-                parsed["raw_response"] = raw
-                parsed["model"] = self.model_name
-                parsed["tool_calls_log"] = self.tool_calls_log
-                parsed["iterations"] = iteration + 1
-                try:
-                    parsed["prompt_tokens"] = response.usage.prompt_tokens
-                except AttributeError:
-                    parsed["prompt_tokens"] = None
-                return parsed
-
-            # ── Execute tool calls ──
-            # Build a clean dict — Groq rejects unsupported fields like 'annotations'.
-            assistant_dict: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_message.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in tool_calls
-                ],
-            }
-            messages.append(assistant_dict)
-
-            for tool_call in tool_calls:
-                fn_name = tool_call.function.name
-                try:
-                    fn_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                # Cast numeric args that arrive as floats
-                for k, v in fn_args.items():
-                    if isinstance(v, float) and v == int(v):
-                        fn_args[k] = int(v)
-
-                # Dispatch
-                tool_fn = TOOL_REGISTRY.get(fn_name)
-                if tool_fn is not None:
-                    result = tool_fn(**fn_args)
-                else:
-                    result = {"error": f"Unknown tool: {fn_name}"}
-
-                # Log
-                self.tool_calls_log.append({
-                    "iteration": iteration + 1,
-                    "tool": fn_name,
-                    "args": fn_args,
-                    "result_preview": str(result)[:300],
-                })
-
-                # Callback for live UI
-                if on_tool_call:
-                    on_tool_call(fn_name, fn_args, result)
-
-                # Send tool result back to the model (truncated to save tokens)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": _truncate_tool_result(result),
-                })
-
-        # ── Exhausted iterations — try fallback ──
-        return self._fallback_analysis(MAX_AGENT_ITERATIONS)
-
-    # ------------------------------------------------------------------
-    # Fallback analysis when rate-limited or max iterations reached
-    # ------------------------------------------------------------------
-    def _fallback_analysis(self, iterations: int) -> dict[str, Any]:
-        """Produce a best-effort analysis from the tool results we gathered."""
-        # Collect all tool results into a summary
-        summary_parts = []
-        for tc in self.tool_calls_log:
-            summary_parts.append(
-                f"Tool: {tc['tool']}, Args: {tc['args']}, "
-                f"Result: {tc['result_preview']}"
-            )
-        tool_summary = "\n".join(summary_parts) if summary_parts else "No tool results gathered."
-
-        # Try one more LLM call with just the tool summary (smaller context = less tokens)
-        fallback_prompt = (
-            "Based on the following tool investigation results, provide your "
-            "structured analysis.\n\n"
-            f"Tool Results:\n{tool_summary}\n\n"
-            "Respond with:\n"
-            "## Root Cause Analysis\n<analysis>\n\n"
-            "## Probable Cause\n<cause>\n\n"
-            "## Remediation Steps\n<steps>\n\n"
-            "## Confidence\n<HIGH/MEDIUM/LOW>"
-        )
+        # ── Phase 2: Single LLM call for analysis ──
+        prompt = self._build_analysis_prompt(log_file_path, gathered_data, user_query)
 
         messages = [
             {"role": "system", "content": AGENT_SYSTEM_INSTRUCTION},
-            {"role": "user", "content": fallback_prompt},
+            {"role": "user", "content": prompt},
         ]
 
-        try:
-            def _do_fallback():
-                return self._client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=0.3,
-                    max_tokens=2048,
-                )
+        def _do_call():
+            return self._client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=2048,
+            )
 
-            response = _agent_call_with_retry(_do_fallback)
-            raw = response.choices[0].message.content or ""
-            parsed = self._parse_response(raw)
-            parsed["raw_response"] = raw
-            parsed["model"] = self.model_name
-            parsed["tool_calls_log"] = self.tool_calls_log
-            parsed["iterations"] = iterations
-            try:
-                parsed["prompt_tokens"] = response.usage.prompt_tokens
-            except AttributeError:
-                parsed["prompt_tokens"] = None
-            return parsed
-        except Exception:
-            # Ultimate fallback: return whatever we have
-            return {
-                "root_cause": "Agent reached maximum iterations or was rate-limited before completing analysis.",
-                "probable_cause": "",
-                "remediation": "",
-                "confidence": "LOW",
-                "raw_response": "",
-                "model": self.model_name,
-                "tool_calls_log": self.tool_calls_log,
-                "iterations": iterations,
-                "prompt_tokens": None,
-            }
+        try:
+            response = _call_with_retry(_do_call)
+        except Exception as exc:
+            # If LLM fails, return a partial result with tool data
+            return self._fallback_result(str(exc))
+
+        raw = response.choices[0].message.content or ""
+        parsed = self._parse_response(raw)
+        parsed["raw_response"] = raw
+        parsed["model"] = self.model_name
+        parsed["tool_calls_log"] = self.tool_calls_log
+        parsed["iterations"] = 1
+        try:
+            parsed["prompt_tokens"] = response.usage.prompt_tokens
+        except AttributeError:
+            parsed["prompt_tokens"] = None
+        return parsed
 
     # ------------------------------------------------------------------
-    # Private helpers
+    # Phase 1: Local tool execution (no API calls needed)
+    # ------------------------------------------------------------------
+    def _gather_data(
+        self,
+        log_file_path: str,
+        on_tool_call: Optional[Callable] = None,
+    ) -> dict[str, Any]:
+        """Run tools locally to gather all investigation data."""
+        gathered = {}
+
+        # Step 1: Scan all anomalies
+        scan_fn = TOOL_REGISTRY["scan_all_anomalies"]
+        scan_result = scan_fn(file_path=log_file_path, context_window=20)
+        self._log_tool_call("scan_all_anomalies", {"file_path": log_file_path}, scan_result, on_tool_call)
+        gathered["scan"] = scan_result
+
+        # Step 2: Parse primary anomaly
+        parse_fn = TOOL_REGISTRY["parse_log_file"]
+        parse_result = parse_fn(file_path=log_file_path, context_window=20)
+        self._log_tool_call("parse_log_file", {"file_path": log_file_path}, parse_result, on_tool_call)
+        gathered["primary"] = parse_result
+
+        # Step 3: If primary anomaly found, search for related patterns
+        if parse_result.get("status") == "anomaly_found":
+            primary_line = parse_result.get("primary_line_content", "")
+            # Extract key error terms to search for
+            error_terms = re.findall(r'\b(?:error|exception|fail|fatal|critical|timeout|refused)\b', primary_line, re.IGNORECASE)
+            if error_terms:
+                search_fn = TOOL_REGISTRY["search_log_pattern"]
+                pattern = error_terms[0]
+                search_result = search_fn(file_path=log_file_path, pattern=pattern)
+                self._log_tool_call("search_log_pattern", {"file_path": log_file_path, "pattern": pattern}, search_result, on_tool_call)
+                gathered["search"] = search_result
+
+        return gathered
+
+    def _log_tool_call(self, name: str, args: dict, result: dict, callback: Optional[Callable] = None):
+        """Log a tool call."""
+        self.tool_calls_log.append({
+            "iteration": 1,
+            "tool": name,
+            "args": args,
+            "result_preview": str(result)[:300],
+        })
+        if callback:
+            callback(name, args, result)
+
+    # ------------------------------------------------------------------
+    # Build the analysis prompt from gathered data
+    # ------------------------------------------------------------------
+    def _build_analysis_prompt(
+        self,
+        log_file_path: str,
+        gathered: dict[str, Any],
+        user_query: str | None,
+    ) -> str:
+        """Build a single comprehensive prompt from all gathered tool data."""
+        parts = [f"## Log File: {log_file_path}\n"]
+
+        # Scan results
+        scan = gathered.get("scan", {})
+        if scan.get("status") == "anomalies_found":
+            parts.append(f"### Anomaly Scan Summary")
+            parts.append(f"Total log lines: {scan.get('total_log_lines', '?')}")
+            parts.append(f"Anomaly clusters found: {scan.get('anomaly_count', 0)}\n")
+            for a in scan.get("anomalies", [])[:10]:
+                parts.append(
+                    f"- Cluster {a['cluster']}: Line {a['primary_line_number']} "
+                    f"(severity {a['severity']}/6) — {a['primary_line_content'][:100]}"
+                )
+            parts.append("")
+        elif scan.get("status") == "clean":
+            parts.append("### Anomaly Scan: No anomalies detected.\n")
+
+        # Primary anomaly context
+        primary = gathered.get("primary", {})
+        if primary.get("status") == "anomaly_found":
+            parts.append(f"### Primary Anomaly (Highest Severity)")
+            parts.append(f"- Line: {primary.get('primary_line_number', '?')}")
+            parts.append(f"- Severity: {primary.get('severity', '?')}/6")
+            parts.append(f"- Content: {primary.get('primary_line_content', '?')}")
+            parts.append(f"- Context range: lines {primary.get('context_start', '?')}–{primary.get('context_end', '?')}\n")
+            ctx = primary.get("formatted_context", "")
+            parts.append(f"### Context Window (±20 lines around primary error)")
+            parts.append(f"```\n{_truncate(ctx, 2500)}\n```\n")
+
+        # Search results
+        search = gathered.get("search", {})
+        if search.get("match_count", 0) > 0:
+            parts.append(f"### Pattern Search Results (pattern: '{search.get('pattern', '?')}')")
+            parts.append(f"Matches found: {search['match_count']}")
+            for m in search.get("matches", [])[:15]:
+                parts.append(f"  Line {m['line_number']}: {m['content'][:100]}")
+            parts.append("")
+
+        if user_query:
+            parts.append(f"\n### Additional Context from Engineer\n{user_query}\n")
+
+        parts.append("\nPlease analyse the above log data and provide your structured response.")
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Fallback when LLM fails
+    # ------------------------------------------------------------------
+    def _fallback_result(self, error_msg: str) -> dict[str, Any]:
+        """Return a result dict when LLM call fails."""
+        return {
+            "root_cause": f"LLM analysis failed: {error_msg}",
+            "probable_cause": "",
+            "remediation": "Try again in a few minutes or use Quick Scan mode.",
+            "confidence": "LOW",
+            "raw_response": "",
+            "model": self.model_name,
+            "tool_calls_log": self.tool_calls_log,
+            "iterations": 1,
+            "prompt_tokens": None,
+        }
+
+    # ------------------------------------------------------------------
+    # Parse structured response
     # ------------------------------------------------------------------
     @staticmethod
     def _parse_response(text: str) -> dict[str, str]:
@@ -529,8 +344,8 @@ class LogAnalysisAgent:
                     next_header_pos = pos
             sections[key] = text[content_start:next_header_pos].strip()
 
-        # Fallback: if confidence is still UNKNOWN, try to extract from text
-        if sections["confidence"] == "UNKNOWN" or sections["confidence"] == "":
+        # Fallback confidence detection
+        if sections["confidence"] in ("UNKNOWN", ""):
             conf_match = re.search(
                 r"\b(confidence)\b[:\s]*(HIGH|MEDIUM|LOW)",
                 text,
@@ -539,8 +354,6 @@ class LogAnalysisAgent:
             if conf_match:
                 sections["confidence"] = conf_match.group(2).upper()
             elif sections["root_cause"]:
-                # We have analysis but no confidence - default to MEDIUM
                 sections["confidence"] = "MEDIUM"
 
         return sections
-
