@@ -1,0 +1,30 @@
+# Virtual environments
+.venv/
+__pycache__/
+*.pyc
+
+# Environment secrets
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# UV lock (optional)
+uv.lock
+
+# Pytest cache
+.pytest_cache/
+
+# Test artifacts
+test_agent_live.py
+test_groq_migration.py

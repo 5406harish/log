@@ -1,0 +1,108 @@
+2024-06-10 08:00:01 INFO  [main] Application server starting on port 8080
+2024-06-10 08:00:02 INFO  [main] Loading configuration from /etc/app/config.yaml
+2024-06-10 08:00:03 INFO  [db] Connecting to PostgreSQL at db-primary.internal:5432
+2024-06-10 08:00:04 INFO  [db] Connection pool initialized (min=5, max=20)
+2024-06-10 08:00:05 INFO  [cache] Redis connection established at redis.internal:6379
+2024-06-10 08:00:06 INFO  [main] Health check endpoint registered at /healthz
+2024-06-10 08:00:07 INFO  [main] Application started successfully in 6.2s
+2024-06-10 08:15:22 INFO  [http] GET /api/v1/users 200 45ms
+2024-06-10 08:15:23 INFO  [http] POST /api/v1/orders 201 120ms
+2024-06-10 08:15:24 INFO  [http] GET /api/v1/products 200 89ms
+2024-06-10 08:15:25 INFO  [http] DELETE /api/v1/sessions/old 204 12ms
+2024-06-10 08:15:26 INFO  [http] PUT /api/v1/users/42 200 67ms
+2024-06-10 08:15:27 INFO  [http] GET /api/v1/health 200 3ms
+2024-06-10 08:15:28 INFO  [http] GET /api/v1/metrics 200 15ms
+2024-06-10 08:15:29 INFO  [http] POST /api/v1/auth/login 200 230ms
+2024-06-10 08:15:30 INFO  [http] GET /api/v1/dashboard 200 120ms
+2024-06-10 08:15:31 INFO  [http] POST /api/v1/webhooks 201 88ms
+2024-06-10 08:15:32 INFO  [http] GET /api/v1/notifications 200 45ms
+2024-06-10 08:15:33 INFO  [http] PATCH /api/v1/settings 200 34ms
+2024-06-10 08:15:34 INFO  [http] GET /api/v1/users?page=2 200 78ms
+2024-06-10 08:15:35 INFO  [http] POST /api/v1/upload 201 450ms
+2024-06-10 08:15:36 INFO  [http] GET /api/v1/search?q=test 200 230ms
+2024-06-10 08:15:37 INFO  [http] DELETE /api/v1/cache/stale 204 5ms
+2024-06-10 08:15:38 INFO  [http] GET /api/v1/status 200 8ms
+2024-06-10 08:15:39 INFO  [http] POST /api/v1/events 201 67ms
+2024-06-10 08:30:01 WARNING [cache] Redis latency spike detected: 450ms (threshold: 100ms)
+2024-06-10 08:30:02 WARNING [cache] Cache miss rate elevated: 45% (normal: <10%)
+2024-06-10 08:30:15 INFO  [http] GET /api/v1/products 200 230ms
+2024-06-10 08:30:16 INFO  [http] GET /api/v1/orders 200 180ms
+2024-06-10 08:30:17 INFO  [http] POST /api/v1/cart 201 95ms
+2024-06-10 08:30:18 INFO  [http] GET /api/v1/inventory 200 120ms
+2024-06-10 08:30:19 INFO  [http] PUT /api/v1/orders/99 200 145ms
+2024-06-10 08:30:20 INFO  [http] GET /api/v1/shipping 200 88ms
+2024-06-10 08:30:21 INFO  [http] POST /api/v1/payments 201 340ms
+2024-06-10 08:30:22 INFO  [http] GET /api/v1/reports 200 560ms
+2024-06-10 08:30:23 INFO  [http] DELETE /api/v1/temp-files 204 12ms
+2024-06-10 08:30:24 INFO  [http] GET /api/v1/audit-log 200 230ms
+2024-06-10 08:30:25 INFO  [http] POST /api/v1/batch-process 202 1200ms
+2024-06-10 08:30:26 INFO  [http] GET /api/v1/config 200 15ms
+2024-06-10 08:30:27 INFO  [http] PATCH /api/v1/profile 200 67ms
+2024-06-10 08:30:28 INFO  [http] GET /api/v1/tags 200 34ms
+2024-06-10 08:30:29 INFO  [http] POST /api/v1/comments 201 89ms
+2024-06-10 08:30:30 INFO  [http] GET /api/v1/categories 200 45ms
+2024-06-10 08:30:31 INFO  [http] PUT /api/v1/preferences 200 56ms
+2024-06-10 08:30:32 INFO  [http] GET /api/v1/stats 200 178ms
+2024-06-10 08:30:33 INFO  [http] POST /api/v1/feedback 201 34ms
+2024-06-10 08:30:34 INFO  [http] GET /api/v1/changelog 200 23ms
+2024-06-10 08:45:00 WARNING [db] Connection pool nearing capacity: 18/20 active connections
+2024-06-10 08:45:01 WARNING [db] Slow query detected: SELECT * FROM orders WHERE status='pending' took 3200ms
+2024-06-10 08:45:30 ERROR [db] Connection pool exhausted - all 20 connections in use
+2024-06-10 08:45:31 ERROR [db] Failed to acquire connection within timeout (5000ms)
+2024-06-10 08:45:32 ERROR [http] GET /api/v1/orders "HTTP/1.1" 503 Service Unavailable
+2024-06-10 08:45:33 ERROR [http] POST /api/v1/checkout "HTTP/1.1" 502 Bad Gateway
+2024-06-10 08:45:34 WARNING [lb] Upstream server 10.0.1.5:8080 not responding
+2024-06-10 08:45:35 ERROR [db] org.postgresql.util.PSQLException: FATAL: too many connections for role "app_user"
+2024-06-10 08:45:36 ERROR [app] Traceback (most recent call last):
+2024-06-10 08:45:36 ERROR [app]   File "/app/services/order_service.py", line 142, in process_order
+2024-06-10 08:45:36 ERROR [app]     db_conn = connection_pool.acquire(timeout=5)
+2024-06-10 08:45:36 ERROR [app]   File "/app/db/pool.py", line 89, in acquire
+2024-06-10 08:45:36 ERROR [app]     raise ConnectionPoolExhaustedError("No available connections")
+2024-06-10 08:45:36 ERROR [app] ConnectionPoolExhaustedError: No available connections
+2024-06-10 08:45:37 INFO  [monitor] Checking system health...
+2024-06-10 08:45:38 INFO  [monitor] CPU usage: 78%
+2024-06-10 08:45:39 INFO  [monitor] Disk I/O: 340MB/s read, 120MB/s write
+2024-06-10 08:45:40 INFO  [http] GET /api/v1/health 200 5ms
+2024-06-10 08:45:41 INFO  [http] GET /api/v1/status 200 8ms
+2024-06-10 08:45:42 INFO  [cache] Cache warm-up complete for product catalog
+2024-06-10 08:45:43 INFO  [http] GET /api/v1/products 200 45ms
+2024-06-10 08:45:44 INFO  [scheduler] Running background job: cleanup_sessions
+2024-06-10 08:45:45 INFO  [scheduler] Job completed: 142 expired sessions removed
+2024-06-10 08:45:46 INFO  [http] POST /api/v1/analytics 201 230ms
+2024-06-10 08:45:47 INFO  [http] GET /api/v1/users/me 200 34ms
+2024-06-10 08:45:48 INFO  [queue] Message published to order_events: order.created
+2024-06-10 08:45:49 INFO  [queue] Message consumed from payment_events: payment.completed
+2024-06-10 08:45:50 INFO  [http] PUT /api/v1/orders/100/status 200 89ms
+2024-06-10 08:45:51 INFO  [email] Notification sent to user@example.com
+2024-06-10 08:45:52 INFO  [http] GET /api/v1/admin/metrics 200 120ms
+2024-06-10 08:45:53 INFO  [audit] Login attempt from 192.168.1.45: success
+2024-06-10 08:45:54 INFO  [http] POST /api/v1/exports 202 45ms
+2024-06-10 08:45:55 INFO  [storage] File uploaded to S3: reports/2024-06-10.pdf
+2024-06-10 08:45:56 INFO  [http] GET /api/v1/downloads/report-123 200 890ms
+2024-06-10 08:45:57 INFO  [http] DELETE /api/v1/notifications/read 204 12ms
+2024-06-10 08:45:58 INFO  [cron] Scheduled task: daily_report started
+2024-06-10 08:45:59 INFO  [cron] Task daily_report completed in 3.2s
+2024-06-10 08:46:00 INFO  [http] GET /api/v1/version 200 2ms
+2024-06-10 08:46:01 INFO  [gc] GC collection: gen0=1234 gen1=56 gen2=2
+2024-06-10 08:46:02 INFO  [http] POST /api/v1/webhooks/test 200 340ms
+2024-06-10 08:46:03 INFO  [http] GET /api/v1/search?q=widget 200 156ms
+2024-06-10 08:46:04 INFO  [http] PATCH /api/v1/users/42/profile 200 78ms
+2024-06-10 08:46:05 INFO  [cache] Cache invalidation: product_catalog (stale)
+2024-06-10 08:46:06 INFO  [http] GET /api/v1/products?refresh=true 200 450ms
+2024-06-10 08:46:07 INFO  [db] Connection pool stats: active=12, idle=8, max=20
+2024-06-10 08:46:08 INFO  [http] POST /api/v1/orders 201 120ms
+2024-06-10 08:46:09 INFO  [http] GET /api/v1/orders/101 200 34ms
+2024-06-10 08:46:10 INFO  [queue] Dead letter queue: 0 messages
+2024-06-10 08:50:00 WARNING [gc] GC pause detected: 1200ms (generation 2 full collection)
+2024-06-10 08:50:01 WARNING [memory] Heap usage: 3.8GB / 4.0GB (95%)
+2024-06-10 08:50:02 ERROR [memory] java.lang.OutOfMemoryError: Java heap space
+2024-06-10 08:50:02 FATAL [memory] Out of memory - process will be killed by OOM killer
+2024-06-10 08:50:03 CRITICAL [main] Application crash imminent - initiating graceful shutdown
+2024-06-10 08:50:04 ERROR [main] Graceful shutdown failed - connections still active
+2024-06-10 08:50:05 FATAL [main] Process killed by signal 9 (SIGKILL) - OOM killer activated
+2024-06-10 09:00:00 INFO  [main] Application server restarting after crash
+2024-06-10 09:00:01 INFO  [main] Loading configuration from /etc/app/config.yaml
+2024-06-10 09:00:05 INFO  [db] Reconnecting to PostgreSQL at db-primary.internal:5432
+2024-06-10 09:00:06 WARNING [db] Connection refused by db-primary.internal:5432 - retrying in 5s
+2024-06-10 09:00:11 INFO  [db] Connection pool re-initialized (min=5, max=20)
+2024-06-10 09:00:12 INFO  [main] Application recovered successfully
