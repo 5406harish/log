@@ -185,18 +185,20 @@ with st.sidebar:
     st.divider()
 
     # --- API Key ---
-    # Streamlit Cloud: secrets come from st.secrets
-    # Local dev: secrets come from .env via os.getenv
+    # Priority: st.secrets (Cloud) > os.getenv (.env local) > user input
+    env_key = ""
     try:
-        env_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
+        env_key = st.secrets.get("GROQ_API_KEY", "")
     except Exception:
+        pass
+    if not env_key:
         env_key = os.getenv("GROQ_API_KEY", "")
     api_key_input = st.text_input(
         "🔑 Groq API Key",
         value=env_key,
         type="password",
-        help="Enter your Groq Cloud API key (free at console.groq.com). Auto-loaded from secrets on Streamlit Cloud.",
-        placeholder="Enter your API key...",
+        help="Get a free key at console.groq.com/keys. On Streamlit Cloud, configure via App Settings > Secrets.",
+        placeholder="Paste your Groq API key here...",
     )
     # Use whichever is available
     api_key = api_key_input.strip() or env_key.strip()
